@@ -25,6 +25,19 @@ if [ $EUID -ne 0 ]; then
     exit 1
 fi
 
+# ==========================================
+# 生成快捷命令 anytls
+# ==========================================
+if [ -f "$0" ] && [ "$(realpath $0)" != "/usr/local/bin/anytls" ]; then
+    cp "$(realpath $0)" /usr/local/bin/anytls
+    chmod +x /usr/local/bin/anytls
+    echo -e "${GREEN}==========================================${PLAIN}"
+    echo -e "${GREEN}✅ 快捷命令配置成功！${PLAIN}"
+    echo -e "${GREEN}👉 以后在任意路径下输入 ${YELLOW}anytls${GREEN} 即可调出本面板${PLAIN}"
+    echo -e "${GREEN}==========================================${PLAIN}"
+    sleep 2
+fi
+
 # 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar)...${PLAIN}"
@@ -101,12 +114,26 @@ EOT
     systemctl enable anytls
     systemctl start anytls
 
+    # 获取公网IP和主机名，用于生成节点链接
+    echo -e "${YELLOW}正在获取本机公网 IP...${PLAIN}"
+    PUBLIC_IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com)
+    if [ -z "$PUBLIC_IP" ]; then
+        PUBLIC_IP="请替换为您的服务器IP"
+    fi
+    HOST_NAME=$(hostname)
+    
+    # 生成节点分享链接
+    ANYTLS_LINK="anytls://${PASSWORD}@${PUBLIC_IP}:${PORT}?security=tls&insecure=1&allowInsecure=1&type=tcp&headerType=none#${HOST_NAME}"
+
     echo -e "${GREEN}========================================${PLAIN}"
     echo -e "${GREEN}✅ Anytls-go 安装成功并已设置开机自启！${PLAIN}"
     echo -e "${GREEN}========================================${PLAIN}"
     echo -e "👉 监听地址: ${YELLOW}0.0.0.0${PLAIN}"
     echo -e "👉 连接端口: ${YELLOW}${PORT}${PLAIN}"
     echo -e "👉 连接密码: ${YELLOW}${PASSWORD}${PLAIN}"
+    echo -e "${GREEN}----------------------------------------${PLAIN}"
+    echo -e "🔗 ${GREEN}节点分享链接 (可直接复制导入客户端):${PLAIN}"
+    echo -e "${YELLOW}${ANYTLS_LINK}${PLAIN}"
     echo -e "${GREEN}========================================${PLAIN}"
     echo -e "服务状态检查: systemctl status anytls"
 }
