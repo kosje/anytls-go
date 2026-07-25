@@ -1,33 +1,46 @@
 #!/bin/bash
 
+# ==========================================
+# Anytls-go & Realm 综合管理脚本
+# ==========================================
+
 # 颜色设置
 RED="\033[31m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
 PLAIN="\033[0m"
 
+# Anytls-go 变量
 INSTALL_DIR="/root/anytls"
 SERVICE_FILE="/etc/systemd/system/anytls.service"
 
+# Realm 变量
+REALM_BIN="/usr/local/bin/realm"
+REALM_CONF_DIR="/etc/realm"
+REALM_SERVICE="/etc/systemd/system/realm.service"
+
 # 检查是否为root用户
 if [ $EUID -ne 0 ]; then
-    echo -e "${RED}错误：必须使用 root 用户运行此脚本！${PLAIN}"
+    echo -e "${RED}❌ 错误：请使用 root 权限或 sudo 运行此脚本！${PLAIN}"
     exit 1
 fi
 
 # 安装依赖
 install_dependencies() {
-    echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip)...${PLAIN}"
+    echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar)...${PLAIN}"
     if command -v apt >/dev/null 2>&1; then
-        apt update -y && apt install -y curl wget unzip
+        apt update -y && apt install -y curl wget unzip tar
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y curl wget unzip
+        yum install -y curl wget unzip tar
     else
-        echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip！${PLAIN}"
+        echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip, tar！${PLAIN}"
     fi
 }
 
-# 获取最新版本号
+# ==========================================
+# Anytls-go 功能模块
+# ==========================================
+
 get_latest_version() {
     LATEST_VERSION=$(curl -s https://api.github.com/repos/anytls/anytls-go/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     if [ -z "$LATEST_VERSION" ]; then
@@ -38,7 +51,6 @@ get_latest_version() {
     echo -e "${GREEN}检测到 Anytls-go 最新版本为: ${LATEST_VERSION}${PLAIN}"
 }
 
-# 安装 Anytls-go
 install_anytls() {
     if [ -d "$INSTALL_DIR" ]; then
         echo -e "${YELLOW}Anytls-go 似乎已经安装。如果需要覆盖安装，请先卸载。${PLAIN}"
@@ -48,10 +60,7 @@ install_anytls() {
     install_dependencies
     get_latest_version
 
-    # 生成 10000 到 65000 之间的随机端口
     PORT=$(shuf -i 10000-65000 -n 1)
-    
-    # 生成 20位随机密码 (包含大小写字母和数字)
     PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
     echo -e "${YELLOW}正在下载 Anytls-go ${LATEST_VERSION}...${PLAIN}"
@@ -93,16 +102,15 @@ EOT
     systemctl start anytls
 
     echo -e "${GREEN}========================================${PLAIN}"
-    echo -e "${GREEN}Anytls-go 安装成功并已设置开机自启！${PLAIN}"
+    echo -e "${GREEN}✅ Anytls-go 安装成功并已设置开机自启！${PLAIN}"
     echo -e "${GREEN}========================================${PLAIN}"
-    echo -e "监听地址: ${YELLOW}0.0.0.0${PLAIN}"
-    echo -e "连接端口: ${YELLOW}${PORT}${PLAIN}"
-    echo -e "连接密码: ${YELLOW}${PASSWORD}${PLAIN}"
+    echo -e "👉 监听地址: ${YELLOW}0.0.0.0${PLAIN}"
+    echo -e "👉 连接端口: ${YELLOW}${PORT}${PLAIN}"
+    echo -e "👉 连接密码: ${YELLOW}${PASSWORD}${PLAIN}"
     echo -e "${GREEN}========================================${PLAIN}"
     echo -e "服务状态检查: systemctl status anytls"
 }
 
-# 更新 Anytls-go
 update_anytls() {
     if [ ! -f "$SERVICE_FILE" ]; then
         echo -e "${RED}未检测到 Anytls-go，请先安装！${PLAIN}"
@@ -110,7 +118,6 @@ update_anytls() {
     fi
 
     get_latest_version
-    
     echo -e "${YELLOW}正在停止现有服务...${PLAIN}"
     systemctl stop anytls
 
@@ -132,54 +139,153 @@ update_anytls() {
 
     echo -e "${YELLOW}正在启动服务...${PLAIN}"
     systemctl start anytls
-    echo -e "${GREEN}Anytls-go 已成功更新到最新版本 ${LATEST_VERSION}！${PLAIN}"
+    echo -e "${GREEN}✅ Anytls-go 已成功更新到最新版本 ${LATEST_VERSION}！${PLAIN}"
 }
 
-# 卸载 Anytls-go
 uninstall_anytls() {
     echo -e "${YELLOW}正在卸载 Anytls-go...${PLAIN}"
-    
-    # 结束进程
     pkill -f anytls-server 2>/dev/null
-
     if [ -f "$SERVICE_FILE" ]; then
         systemctl stop anytls
         systemctl disable anytls
         rm -f $SERVICE_FILE
         systemctl daemon-reload
     fi
-
     rm -rf $INSTALL_DIR
-    echo -e "${GREEN}Anytls-go 卸载完成！${PLAIN}"
+    echo -e "${GREEN}✅ Anytls-go 卸载完成！${PLAIN}"
 }
 
-# 菜单
-echo -e "${GREEN}Anytls-go 一键管理脚本${PLAIN}"
-echo -e "1. ${GREEN}安装${PLAIN} Anytls-go"
-echo -e "2. ${GREEN}更新${PLAIN} Anytls-go (保留原端口和密码)"
-echo -e "3. ${RED}卸载${PLAIN} Anytls-go"
-echo -e "0. 退出脚本"
-read -p "请输入选项 [0-3]: " num
+# ==========================================
+# Realm 中转功能模块
+# ==========================================
+
+install_realm() {
+    echo -e "${GREEN}==========================================${PLAIN}"
+    echo -e "${GREEN}    欢迎使用 Realm 一键中转部署脚本${PLAIN}"
+    echo -e "${GREEN}==========================================${PLAIN}"
+
+    install_dependencies
+
+    read -p "请输入本地中转机监听端口 [默认 12345]: " LOCAL_PORT
+    LOCAL_PORT=${LOCAL_PORT:-12345}
+
+    read -p "请输入落地节点 IP [默认 127.0.0.1]: " REMOTE_IP
+    REMOTE_IP=${REMOTE_IP:-127.0.0.1}
+
+    read -p "请输入落地节点端口 [默认 12345]: " REMOTE_PORT
+    REMOTE_PORT=${REMOTE_PORT:-12345}
+
+    echo -e "\n${YELLOW}[1/4] 开始检测系统架构并下载 Realm...${PLAIN}"
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        REALM_URL="https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-gnu.tar.gz"
+    elif [[ "$ARCH" == "aarch64" ]]; then
+        REALM_URL="https://github.com/zhboner/realm/releases/latest/download/realm-aarch64-unknown-linux-gnu.tar.gz"
+    else
+        echo -e "${RED}❌ 不支持的系统架构: $ARCH${PLAIN}"
+        exit 1
+    fi
+
+    wget -qO realm.tar.gz "$REALM_URL"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ 下载 Realm 失败，请检查中转机网络是否能正常访问 GitHub。${PLAIN}"
+        exit 1
+    fi
+
+    tar -xf realm.tar.gz
+    chmod +x realm
+    mv realm $REALM_BIN
+    rm -f realm.tar.gz
+
+    echo -e "${YELLOW}[2/4] 生成配置文件...${PLAIN}"
+    mkdir -p $REALM_CONF_DIR
+    cat <<INICFG > ${REALM_CONF_DIR}/config.toml
+[network]
+no_tcp_delay = true
+use_v6 = false
+
+[[endpoints]]
+listen = "0.0.0.0:${LOCAL_PORT}"
+remote = "${REMOTE_IP}:${REMOTE_PORT}"
+INICFG
+
+    echo -e "${YELLOW}[3/4] 配置 Systemd 守护进程...${PLAIN}"
+    cat <<SVC > $REALM_SERVICE
+[Unit]
+Description=realm
+After=network-online.target
+Wants=network-online.target systemd-networkd-wait-online.service
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=5s
+ExecStart=${REALM_BIN} -c ${REALM_CONF_DIR}/config.toml
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+    echo -e "${YELLOW}[4/4] 启动 Realm 服务...${PLAIN}"
+    systemctl daemon-reload
+    systemctl enable --now realm
+
+    if systemctl is-active --quiet realm; then
+        echo -e "${GREEN}==========================================${PLAIN}"
+        echo -e "${GREEN}✅ Realm 中转服务搭建成功并已启动！${PLAIN}"
+        echo -e "👉 中转机监听端口: ${YELLOW}${LOCAL_PORT}${PLAIN}"
+        echo -e "👉 目标落地节点: ${YELLOW}${REMOTE_IP}:${REMOTE_PORT}${PLAIN}"
+        echo -e "${GREEN}------------------------------------------${PLAIN}"
+        echo -e "${YELLOW}⚠️ 最后提醒: 请务必确保当前中转机${PLAIN}"
+        echo -e "${YELLOW}的系统防火墙/服务商安全组已放行 TCP 端口 ${LOCAL_PORT}${PLAIN}"
+        echo -e "${GREEN}==========================================${PLAIN}"
+    else
+        echo -e "${RED}❌ 服务启动失败，请运行 'systemctl status realm' 查看错误日志。${PLAIN}"
+    fi
+}
+
+uninstall_realm() {
+    echo -e "${YELLOW}正在卸载 Realm 中转服务...${PLAIN}"
+    if [ -f "$REALM_SERVICE" ]; then
+        systemctl stop realm
+        systemctl disable realm
+        rm -f $REALM_SERVICE
+        systemctl daemon-reload
+    fi
+    rm -rf $REALM_CONF_DIR
+    rm -f $REALM_BIN
+    echo -e "${GREEN}✅ Realm 中转服务卸载完成！${PLAIN}"
+}
+
+# ==========================================
+# 主菜单逻辑
+# ==========================================
+echo -e "${GREEN}Anytls-go & Realm 综合管理脚本${PLAIN}"
+echo -e "=========================================="
+echo -e " 1. ${GREEN}安装${PLAIN} Anytls-go 节点"
+echo -e " 2. ${GREEN}更新${PLAIN} Anytls-go 节点"
+echo -e " 3. ${RED}卸载${PLAIN} Anytls-go 节点"
+echo -e "------------------------------------------"
+echo -e " 4. ${GREEN}安装/配置${PLAIN} Realm 极简中转"
+echo -e " 5. ${RED}卸载${PLAIN} Realm 中转"
+echo -e "=========================================="
+echo -e " 0. 退出脚本"
+echo -e "=========================================="
+read -p "请输入选项 [0-5]: " num
 
 case "$num" in
-    1)
-        install_anytls
-        ;;
-    2)
-        update_anytls
-        ;;
+    1) install_anytls ;;
+    2) update_anytls ;;
     3)
         read -p "确定要卸载 Anytls-go 吗？(y/n): " confirm
-        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-            uninstall_anytls
-        else
-            echo -e "${YELLOW}已取消卸载。${PLAIN}"
-        fi
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_anytls; fi
         ;;
-    0)
-        exit 0
+    4) install_realm ;;
+    5)
+        read -p "确定要卸载 Realm 中转吗？(y/n): " confirm
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_realm; fi
         ;;
-    *)
-        echo -e "${RED}输入错误，请重新运行脚本！${PLAIN}"
-        ;;
+    0) exit 0 ;;
+    *) echo -e "${RED}输入错误，请重新运行脚本！${PLAIN}" ;;
 esac
