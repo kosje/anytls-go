@@ -41,10 +41,11 @@ fi
 # 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar, socat, cron)...${PLAIN}"
-    if command -v apt >/dev/null 2>&1; then
-        apt update -y && apt install -y curl wget unzip tar socat cron
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y curl wget unzip tar socat cron
+    # 加入 </dev/null 防止 apt/yum 吞掉后续 read 命令的输入流
+    if command -v apt>/dev/null 2>&1; then
+        apt update -y </dev/null && apt install -y curl wget unzip tar socat cron </dev/null
+    elif command -v yum>/dev/null 2>&1; then
+        yum install -y curl wget unzip tar socat cron </dev/null
     else
         echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip, tar, socat, cron！${PLAIN}"
     fi
@@ -82,6 +83,8 @@ install_anytls() {
     echo -e "${YELLOW}是否使用自定义域名并申请真实 TLS 证书?${PLAIN}"
     echo -e "配置域名后，客户端将进行严格的 TLS 证书验证 (去掉 insecure)。"
     echo -e "如果不使用，将降级为自签名证书验证。"
+    
+    # 清理输入缓冲区并等待用户输入
     read -p "请输入选项 [y/n，默认 n]: " USE_DOMAIN
 
     CERT_ARGS=""
@@ -142,7 +145,7 @@ install_anytls() {
     chmod +x anytls-server
 
     echo -e "${YELLOW}正在配置 Systemd 服务...${PLAIN}"
-    cat > $SERVICE_FILE << EOT
+    cat> $SERVICE_FILE << EOT
 [Unit]
 Description=AnyTLS Server Service
 After=network-online.target
@@ -273,7 +276,7 @@ install_realm() {
 
     echo -e "${YELLOW}[2/4] 生成配置文件...${PLAIN}"
     mkdir -p $REALM_CONF_DIR
-    cat <<INICFG > ${REALM_CONF_DIR}/config.toml
+    cat <<INICFG> ${REALM_CONF_DIR}/config.toml
 [network]
 no_tcp_delay = true
 use_v6 = false
@@ -284,7 +287,7 @@ remote = "${REMOTE_IP}:${REMOTE_PORT}"
 INICFG
 
     echo -e "${YELLOW}[3/4] 配置 Systemd 守护进程...${PLAIN}"
-    cat <<SVC > $REALM_SERVICE
+    cat <<SVC> $REALM_SERVICE
 [Unit]
 Description=realm
 After=network-online.target
