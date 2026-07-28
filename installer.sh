@@ -148,8 +148,7 @@ EOT
     systemctl enable anytls
 
     # ==========================
-    # 调整逻辑：服务文件创建完后再去申请 ACME 证书
-    # 这样 acme 安装完毕时调用的 systemctl restart anytls 就绝对不会报错了
+    # 服务文件创建完后再去申请 ACME 证书
     # ==========================
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
         echo -e "${YELLOW}正在通过 acme.sh 申请证书 (请确保 80 端口未被占用)...${PLAIN}"
@@ -158,7 +157,9 @@ EOT
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
         ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone
-        if [ $? -ne 0 ]; then
+        ACME_RET=$?
+        # 兼容 acme.sh 返回值: 0 是新申请成功, 2 是证书还有效主动跳过申请
+        if [ $ACME_RET -ne 0 ] && [ $ACME_RET -ne 2 ]; then
             echo -e "${RED}证书申请失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
             rm -f $SERVICE_FILE
             systemctl daemon-reload
@@ -166,7 +167,7 @@ EOT
             exit 1
         fi
         
-        # 证书下发，立刻唤醒刚才建好的 AnyTLS 服务
+        # 证书下发或验证跳过结束后，安装到工作目录并唤醒服务
         ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
             --key-file       $INSTALL_DIR/server.key  \
             --fullchain-file $INSTALL_DIR/server.crt \
