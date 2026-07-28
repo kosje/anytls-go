@@ -41,10 +41,9 @@ fi
 # 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar, socat, cron)...${PLAIN}"
-    # 加入 </dev/null 防止 apt/yum 吞掉后续 read 命令的输入流
-    if command -v apt>/dev/null 2>&1; then
+    if command -v apt >/dev/null 2>&1; then
         apt update -y </dev/null && apt install -y curl wget unzip tar socat cron </dev/null
-    elif command -v yum>/dev/null 2>&1; then
+    elif command -v yum >/dev/null 2>&1; then
         yum install -y curl wget unzip tar socat cron </dev/null
     else
         echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip, tar, socat, cron！${PLAIN}"
@@ -84,8 +83,8 @@ install_anytls() {
     echo -e "配置域名后，客户端将进行严格的 TLS 证书验证 (去掉 insecure)。"
     echo -e "如果不使用，将降级为自签名证书验证。"
     
-    # 清理输入缓冲区并等待用户输入
-    read -p "请输入选项 [y/n，默认 n]: " USE_DOMAIN
+    # 使用 /dev/tty 强制读取用户输入，防止被前面包管理器吞噬输入流
+    read -p "请输入选项 [y/n，默认 n]: " USE_DOMAIN </dev/tty
 
     CERT_ARGS=""
     LINK_HOST="$PUBLIC_IP"
@@ -93,31 +92,14 @@ install_anytls() {
     LINK_INSECURE="&insecure=1&allowInsecure=1"
 
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
-        read -p "请输入您的域名 (请务必确保已提前解析到本机IP: $PUBLIC_IP): " DOMAIN
+        read -p "请输入您的域名 (请务必确保已提前解析到本机IP: $PUBLIC_IP): " DOMAIN </dev/tty
         if [ -z "$DOMAIN" ]; then
             echo -e "${RED}域名不能为空！${PLAIN}"
             exit 1
         fi
         
-        # 申请证书
-        echo -e "${YELLOW}正在通过 acme.sh 申请证书 (请确保 80 端口未被占用)...${PLAIN}"
-        curl -sL https://get.acme.sh | sh -s email=admin@$DOMAIN
-        ~/.acme.sh/acme.sh --upgrade --auto-upgrade
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-        
-        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}证书申请失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
-            exit 1
-        fi
-        
-        mkdir -p $INSTALL_DIR
-        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-            --key-file       $INSTALL_DIR/server.key  \
-            --fullchain-file $INSTALL_DIR/server.crt \
-            --reloadcmd      "systemctl restart anytls"
-            
-        CERT_ARGS="-c $INSTALL_DIR/server.crt -k $INSTALL_DIR/server.key"
+        # 定义真实证书路径参数，给服务启动时使用
+        CERT_ARGS="-cert $INSTALL_DIR/server.crt -key $INSTALL_DIR/server.key"
         LINK_HOST="$DOMAIN"
         LINK_SNI="&sni=$DOMAIN"
         LINK_INSECURE="" # 去掉跳过证书验证的参数
@@ -145,7 +127,7 @@ install_anytls() {
     chmod +x anytls-server
 
     echo -e "${YELLOW}正在配置 Systemd 服务...${PLAIN}"
-    cat> $SERVICE_FILE << EOT
+    cat > $SERVICE_FILE << EOT
 [Unit]
 Description=AnyTLS Server Service
 After=network-online.target
@@ -164,7 +146,35 @@ EOT
 
     systemctl daemon-reload
     systemctl enable anytls
-    systemctl start anytls
+
+    # ==========================
+    # 调整逻辑：服务文件创建完后再去申请 ACME 证书
+    # 这样 acme 安装完毕时调用的 systemctl restart anytls 就绝对不会报错了
+    # ==========================
+    if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
+        echo -e "${YELLOW}正在通过 acme.sh 申请证书 (请确保 80 端口未被占用)...${PLAIN}"
+        curl -sL https://get.acme.sh | sh -s email=admin@$DOMAIN
+        ~/.acme.sh/acme.sh --upgrade --auto-upgrade
+        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+        
+        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}证书申请失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
+            rm -f $SERVICE_FILE
+            systemctl daemon-reload
+            rm -rf $INSTALL_DIR
+            exit 1
+        fi
+        
+        # 证书下发，立刻唤醒刚才建好的 AnyTLS 服务
+        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+            --key-file       $INSTALL_DIR/server.key  \
+            --fullchain-file $INSTALL_DIR/server.crt \
+            --reloadcmd      "systemctl restart anytls"
+    else
+        # 不使用域名时直接启动
+        systemctl start anytls
+    fi
 
     HOST_NAME=$(hostname)
     
@@ -179,7 +189,7 @@ EOT
     echo -e "👉 连接密码: ${YELLOW}${PASSWORD}${PLAIN}"
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
         echo -e "👉 绑定域名: ${YELLOW}${DOMAIN}${PLAIN}"
-        echo -e "👉 证书状态: ${GREEN}已配置真实证书 (启用 SNI 验证)${PLAIN}"
+        echo -e "👉 证书状态: ${GREEN}已配置真实证书 (启用 SNI 严格验证)${PLAIN}"
     fi
     echo -e "${GREEN}----------------------------------------${PLAIN}"
     echo -e "🔗 ${GREEN}节点分享链接 (可直接复制导入客户端):${PLAIN}"
@@ -243,13 +253,13 @@ install_realm() {
 
     install_dependencies
 
-    read -p "请输入本地中转机监听端口 [默认 12345]: " LOCAL_PORT
+    read -p "请输入本地中转机监听端口 [默认 12345]: " LOCAL_PORT </dev/tty
     LOCAL_PORT=${LOCAL_PORT:-12345}
 
-    read -p "请输入落地节点 IP [默认 127.0.0.1]: " REMOTE_IP
+    read -p "请输入落地节点 IP [默认 127.0.0.1]: " REMOTE_IP </dev/tty
     REMOTE_IP=${REMOTE_IP:-127.0.0.1}
 
-    read -p "请输入落地节点端口 [默认 12345]: " REMOTE_PORT
+    read -p "请输入落地节点端口 [默认 12345]: " REMOTE_PORT </dev/tty
     REMOTE_PORT=${REMOTE_PORT:-12345}
 
     echo -e "\n${YELLOW}[1/4] 开始检测系统架构并下载 Realm...${PLAIN}"
@@ -276,7 +286,7 @@ install_realm() {
 
     echo -e "${YELLOW}[2/4] 生成配置文件...${PLAIN}"
     mkdir -p $REALM_CONF_DIR
-    cat <<INICFG> ${REALM_CONF_DIR}/config.toml
+    cat <<INICFG > ${REALM_CONF_DIR}/config.toml
 [network]
 no_tcp_delay = true
 use_v6 = false
@@ -287,7 +297,7 @@ remote = "${REMOTE_IP}:${REMOTE_PORT}"
 INICFG
 
     echo -e "${YELLOW}[3/4] 配置 Systemd 守护进程...${PLAIN}"
-    cat <<SVC> $REALM_SERVICE
+    cat <<SVC > $REALM_SERVICE
 [Unit]
 Description=realm
 After=network-online.target
@@ -340,7 +350,7 @@ uninstall_realm() {
 # ==========================================
 uninstall_script() {
     echo -e "${YELLOW}警告：此操作将彻底删除本管理脚本及快捷命令 'anytls'。${PLAIN}"
-    read -p "是否需要同时卸载已运行的 AnyTLS 和 Realm 服务？(y/n, 默认 n): " rm_srv
+    read -p "是否需要同时卸载已运行的 AnyTLS 和 Realm 服务？(y/n, 默认 n): " rm_srv </dev/tty
     if [[ "$rm_srv" == "y" || "$rm_srv" == "Y" ]]; then
         uninstall_anytls
         uninstall_realm
@@ -373,22 +383,22 @@ echo -e " 6. ${RED}完全卸载${PLAIN} 本管理脚本及快捷命令"
 echo -e "=========================================="
 echo -e " 0. 退出脚本"
 echo -e "=========================================="
-read -p "请输入选项 [0-6]: " num
+read -p "请输入选项 [0-6]: " num </dev/tty
 
 case "$num" in
     1) install_anytls ;;
     2) update_anytls ;;
     3)
-        read -p "确定要卸载 Anytls-go 吗？(y/n): " confirm
+        read -p "确定要卸载 Anytls-go 吗？(y/n): " confirm </dev/tty
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_anytls; fi
         ;;
     4) install_realm ;;
     5)
-        read -p "确定要卸载 Realm 中转吗？(y/n): " confirm
+        read -p "确定要卸载 Realm 中转吗？(y/n): " confirm </dev/tty
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_realm; fi
         ;;
     6)
-        read -p "确定要彻底删除本脚本和快捷命令吗？(y/n): " confirm
+        read -p "确定要彻底删除本脚本和快捷命令吗？(y/n): " confirm </dev/tty
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_script; fi
         ;;
     0) exit 0 ;;
