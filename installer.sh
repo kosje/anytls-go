@@ -98,8 +98,8 @@ install_anytls() {
             exit 1
         fi
         
-        # 定义真实证书路径参数，给服务启动时使用
-        CERT_ARGS="-cert $INSTALL_DIR/server.crt -key $INSTALL_DIR/server.key"
+        # ⚠️修复处：定义真实证书路径参数，必须严格使用双横杠 --cert 和 --key
+        CERT_ARGS="--cert $INSTALL_DIR/server.crt --key $INSTALL_DIR/server.key"
         LINK_HOST="$DOMAIN"
         LINK_SNI="&sni=$DOMAIN"
         LINK_INSECURE="" # 去掉跳过证书验证的参数
@@ -151,19 +151,19 @@ EOT
     # 服务文件创建完后再去申请 ACME 证书
     # ==========================
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
-        echo -e "${YELLOW}正在通过 acme.sh 申请证书 (请确保 80 端口未被占用)...${PLAIN}"
+        echo -e "${YELLOW}正在通过 acme.sh 申请/提取证书...${PLAIN}"
         curl -sL https://get.acme.sh | sh -s email=admin@$DOMAIN
         ~/.acme.sh/acme.sh --upgrade --auto-upgrade
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
-        # 尝试申请证书 (如果已经有效，这一步会报错退出，但不影响后续 install-cert 提取本地旧证书)
-        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone
+        # 尝试申请证书 (加上 || true 防止因为证书未过期被强制跳过时中断脚本)
+        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone || true
         
-        # 强制安装证书到目标文件夹
+        # 强制提取证书到目标文件夹
         ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
             --key-file       $INSTALL_DIR/server.key  \
             --fullchain-file $INSTALL_DIR/server.crt \
-            --reloadcmd      "systemctl restart anytls"
+            --reloadcmd      "systemctl restart anytls" || true
             
         # 最终校验结果：以证书文件是否成功生成且有内容为准
         if [ ! -s "$INSTALL_DIR/server.crt" ]; then
