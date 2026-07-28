@@ -156,22 +156,23 @@ EOT
         ~/.acme.sh/acme.sh --upgrade --auto-upgrade
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
+        # 尝试申请证书 (如果已经有效，这一步会报错退出，但不影响后续 install-cert 提取本地旧证书)
         ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone
-        ACME_RET=$?
-        # 兼容 acme.sh 返回值: 0 是新申请成功, 2 是证书还有效主动跳过申请
-        if [ $ACME_RET -ne 0 ] && [ $ACME_RET -ne 2 ]; then
-            echo -e "${RED}证书申请失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
+        
+        # 强制安装证书到目标文件夹
+        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+            --key-file       $INSTALL_DIR/server.key  \
+            --fullchain-file $INSTALL_DIR/server.crt \
+            --reloadcmd      "systemctl restart anytls"
+            
+        # 最终校验结果：以证书文件是否成功生成且有内容为准
+        if [ ! -s "$INSTALL_DIR/server.crt" ]; then
+            echo -e "${RED}证书提取/生成失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
             rm -f $SERVICE_FILE
             systemctl daemon-reload
             rm -rf $INSTALL_DIR
             exit 1
         fi
-        
-        # 证书下发或验证跳过结束后，安装到工作目录并唤醒服务
-        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-            --key-file       $INSTALL_DIR/server.key  \
-            --fullchain-file $INSTALL_DIR/server.crt \
-            --reloadcmd      "systemctl restart anytls"
     else
         # 不使用域名时直接启动
         systemctl start anytls
