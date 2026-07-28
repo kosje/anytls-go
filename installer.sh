@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Anytls-go & Realm 综合管理脚本 (带域名/ACME)
+# Anytls-go & Realm 综合管理脚本 (带域名/ACME及自毁卸载)
 # ==========================================
 
 # 颜色设置
@@ -38,7 +38,7 @@ if [ -f "$0" ] && [ "$(realpath $0)" != "/usr/local/bin/anytls" ]; then
     sleep 2
 fi
 
-# 安装依赖 (增加 socat 和 cron 供 acme.sh 使用)
+# 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar, socat, cron)...${PLAIN}"
     if command -v apt >/dev/null 2>&1; then
@@ -333,6 +333,28 @@ uninstall_realm() {
 }
 
 # ==========================================
+# 卸载脚本与快捷命令模块
+# ==========================================
+uninstall_script() {
+    echo -e "${YELLOW}警告：此操作将彻底删除本管理脚本及快捷命令 'anytls'。${PLAIN}"
+    read -p "是否需要同时卸载已运行的 AnyTLS 和 Realm 服务？(y/n, 默认 n): " rm_srv
+    if [[ "$rm_srv" == "y" || "$rm_srv" == "Y" ]]; then
+        uninstall_anytls
+        uninstall_realm
+    fi
+    
+    echo -e "${YELLOW}正在清理脚本文件...${PLAIN}"
+    rm -f /usr/local/bin/anytls
+    
+    # 获取真实执行路径并自毁
+    SCRIPT_PATH=$(realpath "$0")
+    rm -f "$SCRIPT_PATH"
+    
+    echo -e "${GREEN}✅ 脚本及快捷命令已完全卸载！您以后将无法使用 anytls 唤出面板。${PLAIN}"
+    exit 0
+}
+
+# ==========================================
 # 主菜单逻辑
 # ==========================================
 echo -e "${GREEN}Anytls-go & Realm 综合管理脚本${PLAIN}"
@@ -343,10 +365,12 @@ echo -e " 3. ${RED}卸载${PLAIN} Anytls-go 节点"
 echo -e "------------------------------------------"
 echo -e " 4. ${GREEN}安装/配置${PLAIN} Realm 极简中转"
 echo -e " 5. ${RED}卸载${PLAIN} Realm 中转"
+echo -e "------------------------------------------"
+echo -e " 6. ${RED}完全卸载${PLAIN} 本管理脚本及快捷命令"
 echo -e "=========================================="
 echo -e " 0. 退出脚本"
 echo -e "=========================================="
-read -p "请输入选项 [0-5]: " num
+read -p "请输入选项 [0-6]: " num
 
 case "$num" in
     1) install_anytls ;;
@@ -359,6 +383,10 @@ case "$num" in
     5)
         read -p "确定要卸载 Realm 中转吗？(y/n): " confirm
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_realm; fi
+        ;;
+    6)
+        read -p "确定要彻底删除本脚本和快捷命令吗？(y/n): " confirm
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then uninstall_script; fi
         ;;
     0) exit 0 ;;
     *) echo -e "${RED}输入错误，请重新运行脚本！${PLAIN}" ;;
