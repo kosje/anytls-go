@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Anytls-go & Realm 综合管理脚本 (带域名/ACME及自毁卸载)
+# Anytls-go & Realm 综合管理脚本 (带 SNI 伪装与自毁卸载)
 # ==========================================
 
 # 颜色设置
@@ -40,13 +40,13 @@ fi
 
 # 安装依赖
 install_dependencies() {
-    echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar, socat, cron)...${PLAIN}"
+    echo -e "${YELLOW}正在检查并安装必要的依赖 (curl, wget, unzip, tar)...${PLAIN}"
     if command -v apt >/dev/null 2>&1; then
-        apt update -y </dev/null && apt install -y curl wget unzip tar socat cron </dev/null
+        apt update -y </dev/null && apt install -y curl wget unzip tar </dev/null
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y curl wget unzip tar socat cron </dev/null
+        yum install -y curl wget unzip tar </dev/null
     else
-        echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip, tar, socat, cron！${PLAIN}"
+        echo -e "${RED}不支持的包管理器，请手动安装 curl, wget, unzip, tar！${PLAIN}"
     fi
 }
 
@@ -79,30 +79,22 @@ install_anytls() {
     fi
 
     echo -e "${GREEN}========================================${PLAIN}"
-    echo -e "${YELLOW}是否使用自定义域名并申请真实 TLS 证书?${PLAIN}"
-    echo -e "配置域名后，客户端将进行严格的 TLS 证书验证 (去掉 insecure)。"
-    echo -e "如果不使用，将降级为自签名证书验证。"
-    
-    # 使用 /dev/tty 强制读取用户输入，防止被前面包管理器吞噬输入流
+    echo -e "${YELLOW}是否配置自定义域名作为 SNI 流量伪装?${PLAIN}"
+    echo -e "注：Anytls 核心原生不支持加载真实 CA 证书，客户端仍需开启跳过证书验证 (insecure)。"
+    echo -e "但配置真实域名作为 SNI 有助于提升流量混淆的安全伪装效果。"
     read -p "请输入选项 [y/n，默认 n]: " USE_DOMAIN </dev/tty
 
-    CERT_ARGS=""
     LINK_HOST="$PUBLIC_IP"
     LINK_SNI=""
-    LINK_INSECURE="&insecure=1&allowInsecure=1"
 
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
-        read -p "请输入您的域名 (请务必确保已提前解析到本机IP: $PUBLIC_IP): " DOMAIN </dev/tty
+        read -p "请输入您的域名 (如 example.com): " DOMAIN </dev/tty
         if [ -z "$DOMAIN" ]; then
             echo -e "${RED}域名不能为空！${PLAIN}"
             exit 1
         fi
-        
-        # ⚠️修复处：定义真实证书路径参数，必须严格使用双横杠 --cert 和 --key
-        CERT_ARGS="--cert $INSTALL_DIR/server.crt --key $INSTALL_DIR/server.key"
         LINK_HOST="$DOMAIN"
         LINK_SNI="&sni=$DOMAIN"
-        LINK_INSECURE="" # 去掉跳过证书验证的参数
     fi
 
     get_latest_version
@@ -127,6 +119,7 @@ install_anytls() {
     chmod +x anytls-server
 
     echo -e "${YELLOW}正在配置 Systemd 服务...${PLAIN}"
+    # 恢复纯粹的极简底层启动参数，移除所有非官方支持的 flag
     cat > $SERVICE_FILE << EOT
 [Unit]
 Description=AnyTLS Server Service
@@ -136,7 +129,7 @@ After=network-online.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/anytls-server -l 0.0.0.0:${PORT} -p ${PASSWORD} ${CERT_ARGS}
+ExecStart=${INSTALL_DIR}/anytls-server -l 0.0.0.0:${PORT} -p ${PASSWORD}
 Restart=always
 RestartSec=3
 
@@ -146,42 +139,12 @@ EOT
 
     systemctl daemon-reload
     systemctl enable anytls
-
-    # ==========================
-    # 服务文件创建完后再去申请 ACME 证书
-    # ==========================
-    if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
-        echo -e "${YELLOW}正在通过 acme.sh 申请/提取证书...${PLAIN}"
-        curl -sL https://get.acme.sh | sh -s email=admin@$DOMAIN
-        ~/.acme.sh/acme.sh --upgrade --auto-upgrade
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-        
-        # 尝试申请证书 (加上 || true 防止因为证书未过期被强制跳过时中断脚本)
-        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone || true
-        
-        # 强制提取证书到目标文件夹
-        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-            --key-file       $INSTALL_DIR/server.key  \
-            --fullchain-file $INSTALL_DIR/server.crt \
-            --reloadcmd      "systemctl restart anytls" || true
-            
-        # 最终校验结果：以证书文件是否成功生成且有内容为准
-        if [ ! -s "$INSTALL_DIR/server.crt" ]; then
-            echo -e "${RED}证书提取/生成失败！请检查 80 端口是否被占用，或域名是否正确解析。${PLAIN}"
-            rm -f $SERVICE_FILE
-            systemctl daemon-reload
-            rm -rf $INSTALL_DIR
-            exit 1
-        fi
-    else
-        # 不使用域名时直接启动
-        systemctl start anytls
-    fi
+    systemctl start anytls
 
     HOST_NAME=$(hostname)
     
-    # 生成节点分享链接
-    ANYTLS_LINK="anytls://${PASSWORD}@${LINK_HOST}:${PORT}?security=tls${LINK_SNI}${LINK_INSECURE}&type=tcp&headerType=none#${HOST_NAME}"
+    # 生成节点分享链接，严格保留 insecure=1 确保协议连通性
+    ANYTLS_LINK="anytls://${PASSWORD}@${LINK_HOST}:${PORT}?security=tls${LINK_SNI}&insecure=1&allowInsecure=1&type=tcp&headerType=none#${HOST_NAME}"
 
     echo -e "${GREEN}========================================${PLAIN}"
     echo -e "${GREEN}✅ Anytls-go 安装成功并已设置开机自启！${PLAIN}"
@@ -190,8 +153,7 @@ EOT
     echo -e "👉 连接端口: ${YELLOW}${PORT}${PLAIN}"
     echo -e "👉 连接密码: ${YELLOW}${PASSWORD}${PLAIN}"
     if [[ "$USE_DOMAIN" == "y" || "$USE_DOMAIN" == "Y" ]]; then
-        echo -e "👉 绑定域名: ${YELLOW}${DOMAIN}${PLAIN}"
-        echo -e "👉 证书状态: ${GREEN}已配置真实证书 (启用 SNI 严格验证)${PLAIN}"
+        echo -e "👉 绑定域名: ${YELLOW}${DOMAIN} (作为 SNI 伪装)${PLAIN}"
     fi
     echo -e "${GREEN}----------------------------------------${PLAIN}"
     echo -e "🔗 ${GREEN}节点分享链接 (可直接复制导入客户端):${PLAIN}"
