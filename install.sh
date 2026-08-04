@@ -35,9 +35,9 @@ if [ -z "$WS_PATH" ]; then
 fi
 
 # 3. 安装必要的基础组件
-echo -e "${GREEN}>>> 正在更新系统源并安装 curl, nginx, uuid-runtime, base64...${NC}"
+echo -e "${GREEN}>>> 正在更新系统源并安装 curl, nginx, uuid-runtime...${NC}"
 apt update -y
-apt install -y curl nginx uuid-runtime base64
+apt install -y curl nginx uuid-runtime
 
 # 4. 配置证书
 mkdir -p /etc/nginx/certs
